@@ -2,7 +2,7 @@
 
 Zoom, Enhance built into Twitter. Automatically finds a face and zooms on it.
 
-<Insert GIF>
+//Insert GIF
 
 ### Usage
 
@@ -13,7 +13,7 @@ You can summon the bot by either:
 
 #### Examples:
 
-<Show example tweets>
+//Show example tweets
 
 ### Where is this bot running?
 
