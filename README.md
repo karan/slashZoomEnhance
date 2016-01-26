@@ -1,4 +1,4 @@
-# slashStock
+# slashZoomEnhance
 
 Zoom, Enhance built into Twitter. Automatically finds a face and zooms on it.
 
