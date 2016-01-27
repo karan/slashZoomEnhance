@@ -1,4 +1,5 @@
 # Built-in imports
+import hashlib
 import logging
 import os
 import shutil
@@ -35,7 +36,7 @@ BLACKLIST = [
     'slashkarebear',
     'slashgif',
     'slashremindme',
-    USERNAME,
+    USERNAME.lower(),
 ]
 
 
@@ -56,52 +57,43 @@ parser = ttp.Parser()
 backoff = BACKOFF
 
 
+def md5(thing):
+    m = hashlib.md5()
+    m.update(thing)
+    return m.hexdigest()
+
 def download_image(url):
     r = requests.get(url, stream=True)
 
     filename = ''
     if r.status_code == 200:
-        filename = 'images/%s.png' % url
+        filename = 'images/%s.png' % md5(url)
         with open(filename, 'wb') as f:
             r.raw.decode_content = True
             shutil.copyfileobj(r.raw, f)
 
-    logging.info('download_image: %s--%s' % (url, filename)
+    logging.info('download_image: %s--%s' % (url, filename))
     return filename
 
 
 def parse_tweet(status):
-    if hasattr(status.entities, 'media') and len(status.entities.media) > 0 and \
-        status.entities.media.type == 'photo':
-        img_url = status.entities.media[0].media_url
+    tweet_from = status.user.screen_name
+    tweet_text = status.text.lower()
+
+    result = parser.parse(tweet_text)
+    tagged_users = result.users + [tweet_from]
+
+    if 'media' in status.entities and status.entities['media'][0]['type'] == 'photo':
+        img_url = status.entities['media'][0]['media_url']
     else:
-        tweet_from = status.user.screen_name
-        tweet_text = status.text
-
-        query = tweet_text[tweet_text.index('@%s' % USERNAME) + len('@%s' % USERNAME) + 1:]
-
-        result = parser.parse(tweet_text)
-        tagged_users = result.users + [tweet_from]
-        tagged_hashtags = result.tags
-        tagged_urls = result.urls
-
-        for user in tagged_users:
-            query = query.replace('@%s' % user, '')
-        for tag in tagged_hashtags:
-            query = query.replace('#%s' % tag, '')
-        for url in tagged_urls:
-            query = query.replace('%s' % url, '')
-
-        logging.info('parse_tweet: %s--%s' % (tagged_users, query))
-
         user = api.get_user(tagged_users[0])
         img_url = user.profile_image_url
 
-    logging.info('parse_tweet: %s--%s--%s' % (tagged_users, img_url))
+    logging.info('parse_tweet: %s--%s' % (tagged_users, img_url))
     return tagged_users, img_url
 
 
-def generate_reply_tweet(users, symbol, quote):
+def generate_reply_tweet(users):
     reply = '%s' % ' '.join(['@%s' % user for user in users if user != USERNAME])
     if len(reply) > MAX_TWEET_TEXT_LENGTH:
         reply = reply[:MAX_TWEET_TEXT_LENGTH - len(DOTS) - 1] + DOTS
@@ -121,25 +113,32 @@ class StreamListener(tweepy.StreamListener):
         tweet_text = status.text
         tweet_from = status.user.screen_name
 
-        if tweet_from.lower() not in BLACKLIST and not hasattr(status, 'retweeted_status'):
-            logging.info('on_status: %s--%s' % (tweet_id, tweet_text))
+        if tweet_from.lower() in BLACKLIST or hasattr(status, 'retweeted_status'):
+            return True
 
-            # Parse tweet for search term
-            tagged_users, img_url = parse_tweet(status)
-            filename = download_image(img_url)
-            try:
-                result_filename = process(filename)
-                reply_tweet = generate_reply_tweet(tagged_users)
-                reply_status = api.update_with_media(filename=result_filename,
-                                                     status=reply_tweet,
-                                                     in_reply_to_status_id=tweet_id)
+        logging.info('on_status: %s--%s' % (tweet_id, tweet_text))
 
-                logging.info('on_status_sent: %s %s' % (reply_status.id_str, reply_status.text))
-            except Exception, e:
-                logging.error('face_detect error: %s' % e)
-                err_tweet = '@%s Something\' not quite right here. cc: @karangoel' tweet_from
-                reply_status = api.update_status(status=err_tweet,
+        # Parse tweet for search term
+        tagged_users, img_url = parse_tweet(status)
+        filename = download_image(img_url)
+        try:
+            result_filename = process(filename)
+            if not result_filename:
+                api.update_status(status='@%s Could not find any faces there..' % tweet_from,
+                                  in_reply_to_status_id=tweet_id)
+                return True
+
+            reply_tweet = generate_reply_tweet(tagged_users)
+            reply_status = api.update_with_media(filename=result_filename,
+                                                 status=reply_tweet,
                                                  in_reply_to_status_id=tweet_id)
+
+            logging.info('on_status_sent: %s %s' % (reply_status.id_str, reply_status.text))
+        except Exception, e:
+            logging.error('face_detect error: %s' % e)
+            err_tweet = '@%s Something\' not quite right here. cc: @karangoel' % tweet_from
+            reply_status = api.update_status(status=err_tweet,
+                                             in_reply_to_status_id=tweet_id)
         return True
 
     def on_error(self, status_code):
@@ -158,8 +157,8 @@ if not os.path.exists('images/'):
 
 stream_listener = StreamListener()
 stream = tweepy.Stream(auth=api.auth, listener=stream_listener)
-try:
-    stream.userstream(_with='user', replies='all')
-except Exception as e:
-    logging.ERROR('stream_exception: %s' % e)
-    raise e
+# try:
+stream.userstream(_with='user', replies='all')
+# except Exception as e:
+#     logging.error('stream_exception: %s' % e)
+#     raise e
